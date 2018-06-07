@@ -242,8 +242,8 @@ changePhysIntConf(){
 
     while read -r int; do
         writeIntConfigFile "SLAVE" "$int" "$bond_master"
-        ifdown $int || echo "Warning: Failed to bring $int down"
-        ifup $int || echo "Warning: Failed to bring $int up"
+        ifdown $int || (>&2 echo "Warning: Failed to bring $int down")
+        ifup $int || (>&2 echo "Warning: Failed to bring $int up")
     done < <(echo $interfaces | sed 's/,/\n/g')
 }
 
