@@ -103,7 +103,6 @@ checkExistingBond() {
 buildBondOpts() {
     local bond_mode=$1
     local bonding_options=$2
-    BOND_OPTS=""           #Always clears the existing values of this global variable before setting the new value
 
     if [[ -z $bonding_options ]]; then
         case $bond_mode in
@@ -151,12 +150,16 @@ buildBondOpts() {
 #   CHK_BOND_PATH           Alias for /proc/net/bonding
 #   MASTER_BOND             Contains the value of the bond master of a interface
 # Arguments:
-#   None
+#   $1 = interfaces csv
 # Returns:
 #   None
 ##################################################################################################
 checkSlaveInterfaces() {
-    if [[ -z $(echo $INTERFACES | awk -F "," '{print $2}') ]] ; then
+    checkFunctionArgs "${FUNCNAME[0]}()" "$#" "1" "${BASH_LINENO[0]}"
+    local interfaces="$1"
+    local master_bond=""
+
+    if [[ -z $(echo $interfaces | awk -F "," '{print $2}') ]] ; then
         echo "Minimum of two interfaces are needed to make a LAG interface. Found only one physical interface." 
         exit 1
     fi
@@ -177,23 +180,18 @@ checkSlaveInterfaces() {
         
         # Finds if the physical interfaces provided in the options is already a slave of 
         # an existing bond interfaces by running recursive grep against /proc/net/bonding/* directory.
-        MASTER_BOND=$(grep -il $int $CHK_BOND_PATH/* 2> /dev/null)
-        if [[ ! -z $MASTER_BOND ]]; then
-            echo "$int is slave of bond interface $(echo $MASTER_BOND | awk -F "/" '{print $NF}'). Creating bond interface failed."
+        master_bond=$(grep -il $int $CHK_BOND_PATH/* 2> /dev/null)
+        if [[ ! -z $master_bond ]]; then
+            echo "$int is slave of bond interface $(echo $master_bond | awk -F "/" '{print $NF}'). Creating bond interface failed."
             exit 1
         fi
-    done < <(echo $INTERFACES | sed 's/,/\n/g')
+    done < <(echo $interfaces | sed 's/,/\n/g')
 }
 
 ##################################################################################################
 # Display the list of useful information of Available Interfaces detected by the system for creating bond interdace
 # Globals:
 #   CHK_BOND_PATH           Alias for /proc/net/bonding
-#   BOND_INTS               Holds the comma separated value for the Bond Interfaces
-#   SLAVE_INTS              Holds the comma separated value for the Slave Interfaces of a bond
-#   IP_CONFIGURED_INTS      Holds the comma separated value for the pre ip configured interfaces
-#   AVAILABLE_INTS          Holds the comma separated value for the available interfaces which 
-#                           can be configured as slave interfaces for the new bond interface.
 # Arguments:
 #   None
 # Returns:
@@ -202,22 +200,27 @@ checkSlaveInterfaces() {
 listInterfaces(){
     # Displays the available bond an physical interfaces by processing the information 
     # present in /proc/net/dev file, /proc/net/bonding/* directory and ip addr command
+    local bond_ints=""
+    local slave_ints=""
+    local ip_configured_ints=""
+    local available_ints=""
+
     while read int; do
         if [[ -f "$CHK_BOND_PATH/$int" ]]; then 
-            BOND_INTS="$int,$BOND_INTS"
-        elif [[ ! -z $(grep -il $int $CHK_BOND_PATH/*) ]]; then
-            SLAVE_INTS="$(grep -il $int $CHK_BOND_PATH/* | awk -F "/" '{print $NF}'):$int,$SLAVE_INTS"
+            bond_ints="$int,$bond_ints"
+        elif [[ ! -z $(grep -il $int $CHK_BOND_PATH/* 2> /dev/null) ]]; then
+            slave_ints="$(grep -il $int $CHK_BOND_PATH/* | awk -F "/" '{print $NF}'):$int,$slave_ints"
         elif [[ ! -z $(ip addr show $int | grep -E "inet" | grep -v "inet6") ]]; then
-            IP_CONFIGURED_INTS="$int,$IP_CONFIGURED_INTS"
+            ip_configured_ints="$int,$ip_configured_ints"
         else
-            AVAILABLE_INTS="$int,$AVAILABLE_INTS"
+            available_ints="$int,$available_ints"
         fi
     done < <(awk -F: '/:/{print $1}' /proc/net/dev | sort)
 
-    echo -e "Bond Interfaces: \n\t$(echo $BOND_INTS | sed 's/,/\n\t/g')"
-    echo -e "Current Configured Slave Interfaces: \n\t$(echo $SLAVE_INTS | sed 's/,/\n\t/g')"
-    echo -e "Current IP Configured Interfaces:\n\t$(echo $IP_CONFIGURED_INTS | sed 's/,/\n\t/g')"
-    echo -e "Interfaces Available for LAG:\n\t$(echo $AVAILABLE_INTS | sed 's/,/\n\t/g')"
+    echo -e "Bond Interfaces: \n\t$(echo $bond_ints | sed 's/,/\n\t/g')"
+    echo -e "Current Configured Slave Interfaces: \n\t$(echo $slave_ints | sed 's/,/\n\t/g')"
+    echo -e "Current IP Configured Interfaces:\n\t$(echo $ip_configured_ints | sed 's/,/\n\t/g')"
+    echo -e "Interfaces Available for LAG:\n\t$(echo $available_ints | sed 's/,/\n\t/g')"
 }
 
 
@@ -290,11 +293,15 @@ writeIntConfigFile() {
     local interface_mode=$1
     local interface_name=$2
     local interface_config_filepath="$INTERFACE_CONFIG_PATH/ifcfg-$interface_name"
+    local bonding_opts=""
+    local master_name=""
+    local master_mod="$4"
 
     #use case statement
-    if [[ $interface_mode == 'SLAVE' ]]; then
-        local master_name=$3
-        cat << INT_CONF_TEMP > "$interface_config_filepath"
+    case ${interface_mode} in
+        "SLAVE")
+            master_name=$3
+            cat << INT_CONF_TEMP > "$interface_config_filepath"
 DEVICE=$interface_name
 BOOTPROTO=none
 MASTER=$master_name
@@ -302,21 +309,41 @@ SLAVE=yes
 ONBOOT=on
 INT_CONF_TEMP
 
-        if [[ $? != 0 ]]; then
-            (>&2 echo "Error: Couldn't write the configuration file of $interface_name interface")
-            #remove bond needs to be called
-            exit 1
-        fi
+            if [[ $? != 0 ]]; then
+                (>&2 echo "Error: Couldn't write the configuration file of $interface_name interface")
+                #remove bond needs to be called
+                exit 1
+            fi
+        ;;
 
-    elif [[ $interface_mode == 'MASTER' ]]; then
+        "SLAVEREMOVE")
+            cat << INT_CONF_TEMP > "$interface_config_filepath"
+DEVICE=$interface_name
+BOOTPROTO=none
+SLAVE=yes
+ONBOOT=off
+INT_CONF_TEMP
 
-        if [[ -f $interface_config_filepath ]]; then
-            (>&2 echo "Error: $interface_config_filepath configuration file already exists.")
-            exit 1
-        fi
+            if [[ $? != 0 ]]; then
+                (>&2 echo "Error: Couldn't write the configuration file of $interface_name interface")
+                #remove bond needs to be called
+                exit 1
+            fi
+        ;;
 
-        local bonding_opts=$3
-        cat << CONF_TEMP > "$interface_config_filepath"
+        "MASTER")
+            if [[ $master_mod == 'MODIFY' ]]; then
+                if [[ ! -f $interface_config_filepath ]]; then
+                    (>&2 echo "Error: $interface_config_filepath configuration file does not exists.")
+                    exit 1
+                fi
+            elif [[ -f $interface_config_filepath ]]; then
+                (>&2 echo "Error: $interface_config_filepath configuration file already exists.")
+                exit 1
+            fi
+
+            bonding_opts=$3
+            cat << CONF_TEMP > "$interface_config_filepath"
 DEVICE=$interface_name
 TYPE=Bond
 BONDING_MASTER=yes
@@ -325,19 +352,25 @@ ONBOOT=yes
 BONDING_OPTS="$bonding_opts"
 CONF_TEMP
 
-        if [[ $? != 0 ]]; then
-            (>&2 echo "Error: Couldn't write the configuration file of $interface_name interface")
-            #remove bond needs to be called
-            exit 1
-        fi
-    fi
+            if [[ $? != 0 ]]; then
+                (>&2 echo "Error: Couldn't write the configuration file of $interface_name interface")
+                #remove bond needs to be called
+                exit 1
+            fi    
+        ;;
+    esac
+    
 }
 
 createIntConfigBackup(){
-    checkFunctionArgs "${FUNCNAME[0]}()" "$#" "2" "${BASH_LINENO[0]}"
+    checkFunctionArgs "${FUNCNAME[0]}()" "$#" "1" "${BASH_LINENO[0]}"
     local interface_name="$1"
-    local backup_path="$2"
+    local backup_path="$CONF_BACKUP_PATH"
     local interface_config_filepath="$INTERFACE_CONFIG_PATH/ifcfg-$interface_name"
+
+    if [[ ! -d $backup_path ]];then
+        mkdir -p $backup_path
+    fi
 
     if [[ -f "$interface_config_filepath" ]]; then
         echo "Creating backup of $interface_config_filepath config file."
@@ -383,23 +416,18 @@ checkFunctionArgs() {
 #   None
 ##################################################################################################
 modifyBondInterface() {
-    if [[ -f $CHK_BOND_PATH/$BOND_NAME ]]; then
-        echo "Reconfiguring LAG Interface $BOND_NAME"
-        buildBondOpts
-        BOND_CONFIG_FILE="$INTERFACE_CONFIG_PATH/ifcfg-$BOND_NAME"
+    checkFunctionArgs "${FUNCNAME[0]}()" "$#" "2" "${BASH_LINENO[0]}"
+    local bond_interface_name="$1"
+    local bonding_options="$2"
 
-        cat << RECONF_TEMP > $BOND_CONFIG_FILE
-DEVICE=$BOND_NAME
-TYPE=Bond
-BONDING_MASTER=yes
-BOOTPROTO=dhcp
-ONBOOT=yes
-BONDING_OPTS="$BOND_OPTS"
-RECONF_TEMP
-        ifdown $BOND_NAME || echo "Warning: Failed to bring $BOND_NAME down"
-        ifup $BOND_NAME || echo "Warning: Failed to bring $BOND_NAME up"
+    if [[ -f "$CHK_BOND_PATH/$bond_interface_name" ]]; then
+        echo "Reconfiguring LAG Interface $bond_interface_name"
+        createIntConfigBackup "$bond_interface_name"
+        writeIntConfigFile "MASTER" "$bond_interface_name" "$bonding_options" "MODIFY"
+        ifdown $bond_interface_name || (>&2 echo "Warning: Failed to bring $bond_interface_name down")
+        ifup $bond_interface_name || (>&2 echo "Warning: Failed to bring $bond_interface_name up")
     else
-        echo "Error: No LAG Interface $BOND_NAME found. Reconfiguring exited!"
+        echo "Error: No existing configuration of LAG Interface $bond_interface_name found. Reconfiguring exited!"
         exit 1
     fi
 }
@@ -418,31 +446,35 @@ RECONF_TEMP
 #   None
 ##################################################################################################
 removeBondInterface(){
-    if [[ -f $CHK_BOND_PATH/$BOND_NAME ]]; then
-        echo "Removing Slave Interfaces for LAG Interface $BOND_NAME"
+    checkFunctionArgs "${FUNCNAME[0]}()" "$#" "1" "${BASH_LINENO[0]}"
+    local bond_name="$1"
+    local interface_config_file=""
+    local bond_config_file="$INTERFACE_CONFIG_PATH/ifcfg-$bond_name"
+
+    if [[ -f "$CHK_BOND_PATH/$bond_name" ]]; then
+        echo "Removing Slave Interfaces for LAG Interface $bond_name"
+
         while read slaveInt; do
-            INTERFACE_CONFIG_FILE="$INTERFACE_CONFIG_PATH/ifcfg-$slaveInt"
-            cp -a $INTERFACE_CONFIG_FILE $INTERFACE_CONFIG_FILE.$(date +%Y-%m-%d_%H%M%S) || echo "Warning: Failed to backup $INTERFACE_CONFIG_FILE"
-            cat << RM_TEMP > $INTERFACE_CONFIG_FILE
-DEVICE=$slaveInt
-BOOTPROTO=none
-ONBOOT=on
-RM_TEMP
-            ifdown $slaveInt || echo "Warning: Failed to bring down $slaveInt down"
-            ifup $slaveInt || echo "Warning: Failed to bring $slaveInt up"
-        done < <(grep -i "slave interface: " $CHK_BOND_PATH/$BOND_NAME | awk -F ": " '{print $2}')
+            interface_config_file="$INTERFACE_CONFIG_PATH/ifcfg-$slaveInt"
+            echo "Removing slave interface $slaveInt from $bond_name"
+            createIntConfigBackup "$slaveInt" 
+            writeIntConfigFile "SLAVEREMOVE" "$slaveInt" "$bond_name"
+
+            ifdown $slaveInt || (>&2 echo "Warning: Failed to bring down $slaveInt down")
+            ifup $slaveInt || (>&2 echo "Warning: Failed to bring $slaveInt up")
+        done < <(grep -i "slave interface: " "$CHK_BOND_PATH/$bond_name" | awk -F ": " '{print $2}')
 
         echo "Removing LAG Interface $BOND_NAME"
-        ifdown $BOND_NAME || echo "Failed to bring $BOND_NAME down"
-        cp -a "$INTERFACE_CONFIG_PATH/ifcfg-$BOND_NAME" "$INTERFACE_CONFIG_PATH/ifcfg-$BOND_NAME.$(date +%Y-%m-%d_%H%M%S)" || echo "Warning: Failed to backup $INTERFACE_CONFIG_PATH/ifcfg-$BOND_NAME"
-        rm -f "$INTERFACE_CONFIG_PATH/ifcfg-$BOND_NAME"
+        ifdown $BOND_NAME || (>&2 echo "Failed to bring $BOND_NAME down")
+        createIntConfigBackup "$bond_name"
+        rm -f "$bond_config_file"
         if [[ $? != 0 ]]; then
-            echo "Couldn't remove the LAG Interface $BOND_NAME"
+            echo "Couldn't remove the LAG Interface $bond_config_file"
             exit 1
         fi
-        echo "LAG Interface $BOND_NAME removed successfully."
+        echo "LAG Interface $bond_name removed successfully."
     else
-        echo "No LAG Interface $BOND_NAME found!"
+        echo "No LAG Interface $bond_name found!"
     fi
 }
 
@@ -486,30 +518,36 @@ main() {
     CHK_BOND_PATH="/proc/net/bonding"
     CHK_INTERFACE_FILE="/proc/net/dev"
     INTERFACE_CONFIG_PATH="/etc/sysconfig/network-scripts"
+    CONF_BACKUP_PATH="/var/int-config-backup/"
     PRESENT_BONDS=""                # Holds the comma separated value for the existing bond interfaces
     
     loadBondingModule
     if [[ $LIST_BOND == 1 ]]; then
         listInterfaces
     elif [[ $MODIFY_BOND == 1 && ! -z $BOND_NAME && ! -z $BOND_MODE && ! -z $BOND_OPTS ]]; then
-        modifyBondInterface
+        buildBondOpts "$BOND_MODE" "$BOND_OPTS"
+        modifyBondInterface "$BOND_NAME" "$BOND_OPTS"
     elif [[ $REMOVE_BOND == 1 && ! -z $BOND_NAME ]]; then
-        removeBondInterface
+        removeBondInterface "$BOND_NAME"
     elif [[ $CREATE_BOND == 1 && ! -z $BOND_MODE && ! -z $INTERFACES ]]; then
         checkExistingBond
-        checkSlaveInterfaces
+        checkSlaveInterfaces "$INTERFACES"
         buildBondOpts "$BOND_MODE" "$BOND_OPTS"
         createBondInterface "$PRESENT_BONDS" "$BOND_OPTS"
         changePhysIntConf "$INTERFACES" "$BOND_INT"
     elif [[ $ADD_ALL_INTERFACES == 1 && ! -z $BOND_MODE ]]; then
-        INTERFACES=$(grep -vE  "$(cat /sys/class/net/bonding_masters | sed 's/ /\|/')|lo" $CHK_INTERFACE_FILE | awk -F: '/:/{print $1}' | sed "s/\n/,/g") 
-        INTERFACES=$(echo $INTERFACES | sed 's/ /,/g')
-        echo $INTERFACES
         checkExistingBond
-        checkSlaveInterfaces
+        if [[ -z "$PRESENT_BONDS" ]];then
+            INTERFACES=$(grep -vE  "lo" $CHK_INTERFACE_FILE | awk -F: '/:/{print $1}' | sed "s/\n/,/g") 
+        else
+            INTERFACES=$(grep -vE  "$(echo "$PRESENT_BONDS" | sed 's/,/|/g')|lo" $CHK_INTERFACE_FILE | awk -F: '/:/{print $1}' | sed "s/\n/,/g") 
+        fi
+
+        echo $INTERFACES
+        checkSlaveInterfaces "$INTERFACES"
         buildBondOpts "$BOND_MODE" "$BOND_OPTS"
-        createBondInterface $PRESENT_BONDS
-        changePhysIntConf $BOND_INT
+        createBondInterface "$PRESENT_BONDS" "$BOND_OPTS"
+        changePhysIntConf "$INTERFACES" "$BOND_INT"
     else
         displayUsage
     fi
