@@ -311,7 +311,8 @@ INT_CONF_TEMP
 
             if [[ $? != 0 ]]; then
                 (>&2 echo "Error: Couldn't write the configuration file of $interface_name interface")
-                #remove bond needs to be called
+                local bond_config_filepath="$INTERFACE_CONFIG_PATH/ifcfg-$master_name"
+                rm -f "$bond_config_filepath"
                 exit 1
             fi
         ;;
@@ -326,7 +327,6 @@ INT_CONF_TEMP
 
             if [[ $? != 0 ]]; then
                 (>&2 echo "Error: Couldn't write the configuration file of $interface_name interface")
-                #remove bond needs to be called
                 exit 1
             fi
         ;;
@@ -354,7 +354,6 @@ CONF_TEMP
 
             if [[ $? != 0 ]]; then
                 (>&2 echo "Error: Couldn't write the configuration file of $interface_name interface")
-                #remove bond needs to be called
                 exit 1
             fi    
         ;;
