@@ -93,10 +93,10 @@ checkExistingBond() {
 # miimon is used for defining the time interval to check the status of the slave interfaces.
 # Globals:
 #   BOND_OPTS   Contains the Bonding Options passed in the arguments while executing the script
-#   BOND_MODE   Contains the numeric or alphabetical mode of the bonding interface
 # Arguments:
 #   $1 = bond_mode
 #   $2 = bonding_options
+#   Usage: buildBondOpts "<'0|active-backup'...>" "miimon 10"
 # Returns:
 #   None
 ##################################################################################################
@@ -144,13 +144,11 @@ buildBondOpts() {
 # is detected/present in the system and checks if they are slave of the existing bond Interface.
 # If any interfaces are detected to be a salve of an existing bond they will be displayed.
 # Globals:
-#   INTERFACES              Contains the comma separated value of the interfaces passed in 
-#                           the -i argument
 #   CHK_INTERFACE_FILE      Alias for /proc/net/dev
 #   CHK_BOND_PATH           Alias for /proc/net/bonding
-#   MASTER_BOND             Contains the value of the bond master of a interface
 # Arguments:
-#   $1 = interfaces csv
+#   $1 = comma separated interrfaces list
+#   Usage: checkSlaveInterfaces "eth1,eth2"
 # Returns:
 #   None
 ##################################################################################################
@@ -228,13 +226,11 @@ listInterfaces(){
 ##################################################################################################
 # Creates a configuration file for the slave interfaces used as a slave interface for a bond interface.
 # Globals:
-#   INTERFACE_CONFIG_PATH               Alias for /etc/sysconfig/network-scripts
-#   INTERFACE_CONFIG_FILE               Holds the filepath of the interface configuration file
-#   INTERFACES                          Holds the comma separated values for slave interfaces
+#   None
 # Arguments:
-#   $1              First positional argument for passing the bond master name
-# Usage:
-#   changePhysIntConf <name_of_bond_master>
+#   $1 = list of interface names separated by commas
+#   $2 = Bond Master
+#   Usage:  changePhysIntConf "eth1,eth2" "bond1"
 # Returns:
 #   None
 ##################################################################################################
@@ -254,16 +250,12 @@ changePhysIntConf(){
 ##################################################################################################
 # Creates a configuration file for the newly created bond interface
 # Globals:
-#   BOND_NUM                    The number of the bond interface
-#   BOND_NUM_LATEST             The number from which the new bond interface will be created
-#   BOND_CONFIG_FILE            The alias for the filepath of the configuration of new bond interface
-#   BOND_INT                    Holds the value of the new bond interface to be created
-#   BOND_OPTS                   Holds the value of the bonding options built from buildBondOpts function
+#   BOND_INT            Holds the name of the bond interface created
 # Arguments:
 #   $1 = present_bonds
 #   $2 = bonding_options
 # Returns:
-#   None
+#   Sets the values of BOND_INT Global variable with the name of the bond interface created
 ##################################################################################################
 createBondInterface() {
     checkFunctionArgs "${FUNCNAME[0]}()" "$#" "2" "${BASH_LINENO[0]}"
@@ -288,6 +280,23 @@ createBondInterface() {
     BOND_INT="$bond_interface_name"
 }
 
+##################################################################################################
+# Writes the configuration of interfaces at /etc/sysconfig/network-scripts location
+# Globals:
+#   INTERFACE_COFIG_PATH            Alias for /etc/sysconfig/network-scripts
+# Arguments:
+#   $1 = interface_mode (SLAVE|SLAVEREMOVE|MASTER)   
+#   $2 = name of a single interface
+#   $3 = If the interface mode is SLAVE or SLACVEREMOVE then it is the name of the bonding master. 
+#        If the interface mode is MASTER then it is the bonding options
+#   $4 = Flag for specifying if the action is modifying the master bonding interface
+#   
+#   Usage: writeIntConfigFile "(SLAVE|SLAVEREMOVE|MASTER)"  "(eth1|bond1)" "(bond1|miimon 10)" "MODIFY"
+# Returns:
+#   None
+# Note:
+#   Exists the script if any major errors are found.
+##################################################################################################
 writeIntConfigFile() {
     checkFunctionArgs "${FUNCNAME[0]}()" "$#" "3" "${BASH_LINENO[0]}"
     local interface_mode=$1
@@ -361,6 +370,20 @@ CONF_TEMP
     
 }
 
+##################################################################################################
+# Create a config backup in the location specified by the client
+# Globals:
+#   CONF_BACKUP_PATH        Alias of the path for storing the backup config files
+#   INTERFACE_CONFIG_PATH   Alias for the path /etc/sysconfig/network-scripts
+# Argurments:
+#   $1 = Name of the interface 
+#   Usage: createIntConfigBackup "eth1|bond1"
+# Returns:
+#   None
+# Note:
+#   If the backup path for storing the backup is not present it will be created and if the dir can't
+#   be created the the script will exit.
+##################################################################################################
 createIntConfigBackup(){
     checkFunctionArgs "${FUNCNAME[0]}()" "$#" "1" "${BASH_LINENO[0]}"
     local interface_name="$1"
@@ -368,7 +391,7 @@ createIntConfigBackup(){
     local interface_config_filepath="$INTERFACE_CONFIG_PATH/ifcfg-$interface_name"
 
     if [[ ! -d $backup_path ]];then
-        mkdir -p $backup_path
+        mkdir -p $backup_path || exit 1
     fi
 
     if [[ -f "$interface_config_filepath" ]]; then
@@ -383,6 +406,23 @@ createIntConfigBackup(){
     fi
 }
 
+##################################################################################################
+# Checks if the arguments passed in the fucntion has minimum number of arguments needed.
+# Also provides the exact location of failed line number.
+# Globals:
+#   None
+# Arguments:
+#   $1 = Name of the function to be checked
+#   $2 = Number of arguments provided in the function while executing it
+#   $3 = NUmber of minimun arguments needed for the script to execute
+#   $4 = Line number from which the function is called
+#
+#   Usage: checkFunctionArgs "${FUNCNAME[0]}()" "$#" "1" "${BASH_LINENO[0]}"
+# Returns:
+#   None
+# Note:
+#   Exits the script is the arguments is not met.
+##################################################################################################
 checkFunctionArgs() {
     local name_of_function=$1
     local num_of_args=$2
@@ -405,14 +445,15 @@ checkFunctionArgs() {
 # Modifies the configuration of the existing bond interface
 # Globals:
 #   CHK_BOND_PATH               Alias for /proc/net/bonding
-#   BOND_NAME                   The interface name for the bond to be modified
-#   INTERFACE_CONFIG_PATH       Alias for /etc/sysconfig/network-scripts/
-#   BOND_CONFIG_FILE            Alias for the filepath of the bond configuration to be modified
-#   BOND_OPTS                   Bonding options built from buildBondOpts function
 # Arguments:
-#   None
+#   $1 = Name of the bond timeterface to be modified
+#   $2 = Bonding Options
+#
+#   Usage: modifyBondInterface "bond1" "miimon 2"
 # Returns:
 #   None
+# Note:
+#   The scirpt is exited if the configuration of LAG Interface is not found
 ##################################################################################################
 modifyBondInterface() {
     checkFunctionArgs "${FUNCNAME[0]}()" "$#" "2" "${BASH_LINENO[0]}"
@@ -436,13 +477,15 @@ modifyBondInterface() {
 # Before removing bond configuration and the changing the slave interface they are backed up.
 # Globals:
 #   CHK_BOND_PATH           Alias for /proc/net/bonding/
-#   BOND_NAME               Bond interface name to be removed
-#   INTERFACE_CONFIG_FILE   Alias for the filepath of configuration of the slave interface
 #   INTERFACE_CONFIG_PATH   Alias for /etc/sysconfig/network-scripts/
 # Arguments:
-#   None 
+#   $1 = Name of the Bond Interface
+#
+#   Usage: removeBondInterface "bond1"
 # Returns:
 #   None
+# Note:
+#   The script is exited if there are any errors./
 ##################################################################################################
 removeBondInterface(){
     checkFunctionArgs "${FUNCNAME[0]}()" "$#" "1" "${BASH_LINENO[0]}"
@@ -483,6 +526,19 @@ main() {
         exit 1
     fi
 
+    ##### DECLARING THE PATH VARIABLES USED GLOBALLY
+    
+    CHK_BOND_PATH="/proc/net/bonding"       #Alias for the path
+    CHK_INTERFACE_FILE="/proc/net/dev"      #Alias for the path
+    INTERFACE_CONFIG_PATH="/etc/sysconfig/network-scripts"  #Alias for the path
+    CONF_BACKUP_PATH="/var/int-config-backup/"      #Alias for the path
+    PRESENT_BONDS=""                # Holds the comma separated value for the existing bond interfaces
+    BOND_MODE=""                    # Holds th value for the bond mode specified from the script
+    INTERFACES=""                   # Holds the value for the comma separated interface names specified 
+    BOND_OPTS=""                    # Holds the value of the bonding options specified 
+    BOND_NAME=""                    # Holds the value of the bond name to delete and modify
+
+
     while getopts "b:i:o:m:r:clk" options; do
         case $options in
             b) BOND_MODE=$OPTARG
@@ -512,14 +568,7 @@ main() {
     fi
     
     
-    ##### DECLARING THE PATH VARIABLES USED GLOBALLY
-    
-    CHK_BOND_PATH="/proc/net/bonding"
-    CHK_INTERFACE_FILE="/proc/net/dev"
-    INTERFACE_CONFIG_PATH="/etc/sysconfig/network-scripts"
-    CONF_BACKUP_PATH="/var/int-config-backup/"
-    PRESENT_BONDS=""                # Holds the comma separated value for the existing bond interfaces
-    
+        
     loadBondingModule
     if [[ $LIST_BOND == 1 ]]; then
         listInterfaces
