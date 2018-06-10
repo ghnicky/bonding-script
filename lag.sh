@@ -98,14 +98,15 @@ checkExistingBond() {
 #   $2 = bonding_options
 #   Usage: buildBondOpts "<'0|active-backup'...>" "miimon 10"
 # Returns:
-#   None
+#   Sets the value of BOND_OPTS global variable according to the arguments passed to the function
 ##################################################################################################
 buildBondOpts() {
-    local bond_mode=$1
-    local bonding_options=$2
+    checkFunctionArgs "${FUNCNAME[0]}()" "$#" "2" "${BASH_LINENO[0]}"
+    local bond_mode="$1"
+    local bonding_options="$2"
 
-    if [[ -z $bonding_options ]]; then
-        case $bond_mode in
+    if [[ -z "$bonding_options" ]]; then
+        case "$bond_mode" in
             0|balance-rr) BOND_OPTS="mode=0 miimon=100"
             ;;
             1|active-backup) BOND_OPTS="mode=1 miimon=100 fail_over_mac=1"
@@ -121,7 +122,7 @@ buildBondOpts() {
             6|balance-alb) BOND_OPTS="mode=6 miimon=100"
         esac 
     else
-        case $bond_mode in
+        case "$bond_mode" in
             0|balance-rr) BOND_OPTS="mode=0 $BOND_OPTS"
             ;;
             1|active-backup) BOND_OPTS="mode=1 $BOND_OPTS"
