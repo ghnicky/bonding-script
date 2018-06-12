@@ -331,7 +331,6 @@ INT_CONF_TEMP
             cat << INT_CONF_TEMP > "$interface_config_filepath"
 DEVICE=$interface_name
 BOOTPROTO=none
-SLAVE=yes
 ONBOOT=off
 INT_CONF_TEMP
 
