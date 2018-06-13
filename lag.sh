@@ -120,6 +120,8 @@ buildBondOpts() {
             5|balance-tlb) BOND_OPTS="mode=5 miimon=100"
             ;;
             6|balance-alb) BOND_OPTS="mode=6 miimon=100"
+            *) BOND_OPTS="mode=1 miimon=100 fail_over_mac=1"
+            ;;
         esac 
     else
         case "$bond_mode" in
@@ -136,6 +138,8 @@ buildBondOpts() {
             5|balance-tlb) BOND_OPTS="mode=5 $BOND_OPTS"
             ;;
             6|balance-alb) BOND_OPTS="mode=6 $BOND_OPTS"
+            *) BOND_OPTS="mode=1 miimon=100 fail_over_mac=1"
+            ;;
         esac
     fi
 }
